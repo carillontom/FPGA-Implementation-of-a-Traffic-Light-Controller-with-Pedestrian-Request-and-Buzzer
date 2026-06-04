@@ -1,0 +1,142 @@
+//============================================================
+// File: red_phase_buzzer.sv
+// Description:
+//   Human-visible buzzer beeping module.
+//
+//   Active only when:
+//     red_active = 1
+//     timer_count > 0
+//
+//   beep_level:
+//     0 = off
+//     1 = slow   : 100 ms ON, 900 ms OFF
+//     2 = medium : 100 ms ON, 400 ms OFF
+//     3 = fast   : 100 ms ON, 100 ms OFF
+//
+//   This version is intentionally simple and easy to verify
+//   on GPIO using an LED.
+//============================================================
+
+module red_phase_buzzer #(
+    parameter int CLK_FREQ_HZ = 50_000_000
+)(
+    input  logic       clk,
+    input  logic       rst_n,
+    input  logic       en,
+
+    input  logic       red_active,
+    input  logic [7:0] timer_count,
+
+    output logic       buzzer_out,
+    output logic [1:0] beep_level
+);
+
+    // 100 ms tick
+    localparam int TICK_100MS_CYCLES = CLK_FREQ_HZ / 10;
+
+    logic [31:0] tick_counter;
+    logic        tick_100ms;
+
+    logic [3:0] pattern_counter;
+    logic [3:0] pattern_period;
+
+    //========================================================
+    // Select beep level
+    //========================================================
+
+    always_comb begin
+        if (!red_active || timer_count == 8'd0) begin
+            beep_level = 2'd0;
+        end
+        else if (timer_count > 8'd10) begin
+            beep_level = 2'd1;       // slow
+        end
+        else if (timer_count > 8'd5) begin
+            beep_level = 2'd2;       // medium
+        end
+        else begin
+            beep_level = 2'd3;       // fast
+        end
+    end
+
+    //========================================================
+    // Select period in 100 ms units
+    //
+    // level 1: period = 10 ticks = 1.0 s
+    // level 2: period = 5 ticks  = 0.5 s
+    // level 3: period = 2 ticks  = 0.2 s
+    //========================================================
+
+    always_comb begin
+        case (beep_level)
+            2'd1: pattern_period = 4'd10;
+            2'd2: pattern_period = 4'd5;
+            2'd3: pattern_period = 4'd2;
+            default: pattern_period = 4'd1;
+        endcase
+    end
+
+    //========================================================
+    // Generate 100 ms tick
+    //========================================================
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            tick_counter <= 32'd0;
+            tick_100ms   <= 1'b0;
+        end
+        else if (!en || beep_level == 2'd0) begin
+            tick_counter <= 32'd0;
+            tick_100ms   <= 1'b0;
+        end
+        else if (tick_counter >= TICK_100MS_CYCLES - 1) begin
+            tick_counter <= 32'd0;
+            tick_100ms   <= 1'b1;
+        end
+        else begin
+            tick_counter <= tick_counter + 32'd1;
+            tick_100ms   <= 1'b0;
+        end
+    end
+
+    //========================================================
+    // Pattern counter
+    //========================================================
+
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            pattern_counter <= 4'd0;
+        end
+        else if (!en || beep_level == 2'd0) begin
+            pattern_counter <= 4'd0;
+        end
+        else if (tick_100ms) begin
+            if (pattern_counter >= pattern_period - 1) begin
+                pattern_counter <= 4'd0;
+            end
+            else begin
+                pattern_counter <= pattern_counter + 4'd1;
+            end
+        end
+    end
+
+    //========================================================
+    // Output
+    //
+    // buzzer_out is HIGH only during the first 100 ms slot
+    // of each pattern period.
+    //========================================================
+
+    always_comb begin
+        if (!en || beep_level == 2'd0) begin
+            buzzer_out = 1'b0;
+        end
+        else if (pattern_counter == 4'd0) begin
+            buzzer_out = 1'b1;
+        end
+        else begin
+            buzzer_out = 1'b0;
+        end
+    end
+
+endmodule : red_phase_buzzer

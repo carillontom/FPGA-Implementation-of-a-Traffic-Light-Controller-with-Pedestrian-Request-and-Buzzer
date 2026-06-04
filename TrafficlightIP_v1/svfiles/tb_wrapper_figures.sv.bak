@@ -1,0 +1,328 @@
+`timescale 1ns/1ps
+
+module tb_wrapper_figures;
+
+    //============================================================
+    // Board-level signals
+    //============================================================
+    logic        CLOCK_50;
+    logic [3:0]  KEY;
+    logic [9:0]  SW;
+
+    logic [9:0]  LEDR;
+    logic [3:0]  GPIO;
+
+    logic [6:0]  HEX5;
+    logic [6:0]  HEX4;
+    logic [6:0]  HEX3;
+    logic [6:0]  HEX2;
+    logic [6:0]  HEX1;
+    logic [6:0]  HEX0;
+
+    //============================================================
+    // Figure marker for waveform screenshots
+    //
+    // 1 = Figure 6.1 normal green-yellow-red cycle
+    // 2 = Figure 6.2 pedestrian request during green
+    // 3 = Figure 6.3 pedestrian request during red
+    // 4 = Figure 6.4 buzzer output during red
+    //============================================================
+    logic [3:0] fig_marker;
+
+    //============================================================
+    // DUT
+    //============================================================
+    wrapper dut (
+        .CLOCK_50 (CLOCK_50),
+        .KEY      (KEY),
+        .SW       (SW),
+
+        .LEDR     (LEDR),
+        .GPIO     (GPIO),
+
+        .HEX5     (HEX5),
+        .HEX4     (HEX4),
+        .HEX3     (HEX3),
+        .HEX2     (HEX2),
+        .HEX1     (HEX1),
+        .HEX0     (HEX0)
+    );
+
+    //============================================================
+    // Simulation-only buzzer speed-up
+    //
+    // Real hardware uses 50_000_000 Hz.
+    // For waveform capture, reduce buzzer timing to make
+    // buzzer_out toggles visible in simulation.
+    //============================================================
+    defparam dut.u_buzzer.CLK_FREQ_HZ = 1000;
+
+    //============================================================
+    // Clock generation: 50 MHz equivalent
+    //============================================================
+    initial begin
+        CLOCK_50 = 1'b0;
+        forever #10 CLOCK_50 = ~CLOCK_50;
+    end
+
+    //============================================================
+    // Reset task
+    //============================================================
+    task automatic reset_system;
+        begin
+            KEY = 4'b1111;
+            SW  = 10'd0;
+
+            // Enable system
+            SW[9] = 1'b1;
+
+            // Manual load disabled
+            SW[8] = 1'b0;
+
+            // Manual time reserved
+            SW[7:0] = 8'd23;
+
+            // Force internal simulation signals to avoid long waiting
+            force dut.u_core.tick_1s      = 1'b0;
+            force dut.u_core.button_pulsee = 1'b0;
+
+            // Active-low reset
+            KEY[0] = 1'b0;
+            repeat (8) @(posedge CLOCK_50);
+
+            KEY[0] = 1'b1;
+            repeat (10) @(posedge CLOCK_50);
+        end
+    endtask
+
+    //============================================================
+    // Generate one simulated 1-second tick
+    //============================================================
+    task automatic pulse_tick_1s;
+        begin
+            @(negedge CLOCK_50);
+            force dut.u_core.tick_1s = 1'b1;
+
+            @(negedge CLOCK_50);
+            force dut.u_core.tick_1s = 1'b0;
+
+            repeat (3) @(posedge CLOCK_50);
+        end
+    endtask
+
+    //============================================================
+    // Generate one simulated pedestrian button pulse
+    //============================================================
+    task automatic press_ped_button;
+        begin
+            @(negedge CLOCK_50);
+            force dut.u_core.button_pulsee = 1'b1;
+
+            @(negedge CLOCK_50);
+            force dut.u_core.button_pulsee = 1'b0;
+
+            repeat (5) @(posedge CLOCK_50);
+        end
+    endtask
+
+    //============================================================
+    // Wait until expected light and timer appear
+    //============================================================
+    task automatic wait_light_timer(
+        input string name,
+        input logic exp_red,
+        input logic exp_yellow,
+        input logic exp_green,
+        input logic [7:0] exp_timer
+    );
+        int timeout;
+        begin
+            timeout = 0;
+
+            while (
+                GPIO[0] !== exp_red    ||
+                GPIO[1] !== exp_yellow ||
+                GPIO[2] !== exp_green  ||
+                dut.u_core.timer_counter_debug !== exp_timer
+            ) begin
+                @(posedge CLOCK_50);
+                timeout++;
+
+                if (timeout > 5000) begin
+                    $display("[%0t] FAIL: timeout waiting for %s", $time, name);
+                    $display("    GPIO R=%0b Y=%0b G=%0b timer=%0d",
+                              GPIO[0], GPIO[1], GPIO[2],
+                              dut.u_core.timer_counter_debug);
+                    $stop;
+                end
+            end
+
+            $display("[%0t] PASS: %s | R=%0b Y=%0b G=%0b timer=%0d",
+                     $time, name, GPIO[0], GPIO[1], GPIO[2],
+                     dut.u_core.timer_counter_debug);
+        end
+    endtask
+
+    //============================================================
+    // Figure 6.1
+    // Normal green-yellow-red cycle
+    //============================================================
+    task automatic run_fig_6_1_normal_cycle;
+        begin
+            $display("==================================================");
+            $display("FIGURE 6.1: Normal GREEN-YELLOW-RED cycle");
+            $display("==================================================");
+
+            fig_marker = 4'd1;
+            reset_system();
+
+            wait_light_timer("Initial GREEN, timer = 15", 1'b0, 1'b0, 1'b1, 8'd15);
+
+            repeat (15) pulse_tick_1s;
+            wait_light_timer("GREEN expired -> YELLOW, timer = 3", 1'b0, 1'b1, 1'b0, 8'd3);
+
+            repeat (3) pulse_tick_1s;
+            wait_light_timer("YELLOW expired -> RED, timer = 15", 1'b1, 1'b0, 1'b0, 8'd15);
+
+            repeat (15) pulse_tick_1s;
+            wait_light_timer("RED expired -> GREEN, timer = 15", 1'b0, 1'b0, 1'b1, 8'd15);
+
+            repeat (20) @(posedge CLOCK_50);
+        end
+    endtask
+
+    //============================================================
+    // Figure 6.2
+    // Pedestrian request during GREEN phase
+    //============================================================
+    task automatic run_fig_6_2_ped_green;
+        begin
+            $display("==================================================");
+            $display("FIGURE 6.2: Pedestrian request during GREEN phase");
+            $display("==================================================");
+
+            fig_marker = 4'd2;
+            reset_system();
+
+            wait_light_timer("Initial GREEN, timer = 15", 1'b0, 1'b0, 1'b1, 8'd15);
+
+            // Press while GREEN has more than 10 seconds remaining.
+            press_ped_button();
+
+            // Expected: FSM enters GREEN_DEC and forces timer to 2.
+            wait_light_timer("Pedestrian request accepted in GREEN, timer forced to 2",
+                             1'b0, 1'b0, 1'b1, 8'd2);
+
+            repeat (30) @(posedge CLOCK_50);
+        end
+    endtask
+
+    //============================================================
+    // Figure 6.3
+    // Pedestrian request during RED phase
+    //============================================================
+    task automatic run_fig_6_3_ped_red;
+        begin
+            $display("==================================================");
+            $display("FIGURE 6.3: Pedestrian request during RED phase");
+            $display("==================================================");
+
+            fig_marker = 4'd3;
+            reset_system();
+
+            wait_light_timer("Initial GREEN, timer = 15", 1'b0, 1'b0, 1'b1, 8'd15);
+
+            // Move to RED phase normally.
+            repeat (15) pulse_tick_1s;
+            wait_light_timer("GREEN expired -> YELLOW", 1'b0, 1'b1, 1'b0, 8'd3);
+
+            repeat (3) pulse_tick_1s;
+            wait_light_timer("YELLOW expired -> RED", 1'b1, 1'b0, 1'b0, 8'd15);
+
+            // Count RED from 15 to 4.
+            repeat (11) pulse_tick_1s;
+            wait_light_timer("RED countdown to 4", 1'b1, 1'b0, 1'b0, 8'd4);
+
+            // Press while RED has fewer than 5 seconds remaining.
+            press_ped_button();
+
+            // Expected: FSM enters RED_INC and adds 10 seconds.
+            wait_light_timer("Pedestrian request accepted in RED, timer extended to 14",
+                             1'b1, 1'b0, 1'b0, 8'd14);
+
+            repeat (30) @(posedge CLOCK_50);
+        end
+    endtask
+
+    //============================================================
+    // Figure 6.4
+    // Buzzer output and timer count during RED phase
+    //
+    // In current design, buzzer is active only when:
+    //   led_red = 1 and ped_request_debug = 1
+    //
+    // Therefore, this test first creates a pending pedestrian
+    // request, then moves the system into RED.
+    //============================================================
+    task automatic run_fig_6_4_buzzer_red;
+        begin
+            $display("==================================================");
+            $display("FIGURE 6.4: Buzzer output and timer count during RED phase");
+            $display("==================================================");
+
+            fig_marker = 4'd4;
+            reset_system();
+
+            wait_light_timer("Initial GREEN, timer = 15", 1'b0, 1'b0, 1'b1, 8'd15);
+
+            // Create pedestrian request during GREEN.
+            // This keeps ped_request_debug visible until RED finishes.
+            press_ped_button();
+            wait_light_timer("GREEN_DEC, timer forced to 2", 1'b0, 1'b0, 1'b1, 8'd2);
+
+            // Move to YELLOW.
+            repeat (2) pulse_tick_1s;
+            wait_light_timer("GREEN_DEC expired -> YELLOW", 1'b0, 1'b1, 1'b0, 8'd3);
+
+            // Move to RED.
+            repeat (3) pulse_tick_1s;
+            wait_light_timer("YELLOW expired -> RED, timer = 15", 1'b1, 1'b0, 1'b0, 8'd15);
+
+            // Show slow beep when timer_count > 10.
+            $display("[%0t] BUZZER SLOW REGION: timer_count > 10", $time);
+            repeat (1200) @(posedge CLOCK_50);
+
+            // Move to timer = 10, medium region.
+            repeat (5) pulse_tick_1s;
+            wait_light_timer("RED timer = 10, medium beep region", 1'b1, 1'b0, 1'b0, 8'd10);
+            $display("[%0t] BUZZER MEDIUM REGION: 6 <= timer_count <= 10", $time);
+            repeat (800) @(posedge CLOCK_50);
+
+            // Move to timer = 5, fast region.
+            repeat (5) pulse_tick_1s;
+            wait_light_timer("RED timer = 5, fast beep region", 1'b1, 1'b0, 1'b0, 8'd5);
+            $display("[%0t] BUZZER FAST REGION: 1 <= timer_count <= 5", $time);
+            repeat (600) @(posedge CLOCK_50);
+        end
+    endtask
+
+    //============================================================
+    // Main simulation
+    //============================================================
+    initial begin
+        fig_marker = 4'd0;
+
+        run_fig_6_1_normal_cycle();
+        run_fig_6_2_ped_green();
+        run_fig_6_3_ped_red();
+        run_fig_6_4_buzzer_red();
+
+        $display("==================================================");
+        $display("ALL FIGURE WAVEFORM TESTS COMPLETED");
+        $display("==================================================");
+
+        #200;
+        $stop;
+    end
+
+endmodule

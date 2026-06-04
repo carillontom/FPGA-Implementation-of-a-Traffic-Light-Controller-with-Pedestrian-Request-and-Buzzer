@@ -1,0 +1,160 @@
+module wrapper(
+	input logic CLOCK_50,	// clock tu fpga
+	input logic [3:0] KEY, 	// KEY[0] rst_n, KEY[2] pedestrian button
+	
+	input logic [9:0] SW, 	// SW[7:0] sw_time, SW[8] manual_load, SW[9] en
+	
+	output logic [9:0] LEDR,
+
+	// Added GPIO outputs for external LEDs and buzzer.
+	// GPIO[0] = red
+	// GPIO[1] = yellow
+	// GPIO[2] = green
+	// GPIO[3] = buzzer
+	output logic [3:0] GPIO,
+
+	// OLD:
+	// output logic [6:0] HEX5, HEX4
+	//
+	// MODIFIED:
+	// HEX5 HEX4 HEX3 = 3-digit countdown timer
+	// HEX2 HEX1 HEX0 = PED / NOR
+	output logic [6:0] HEX5,
+	output logic [6:0] HEX4,
+	output logic [6:0] HEX3,
+	output logic [6:0] HEX2,
+	output logic [6:0] HEX1,
+	output logic [6:0] HEX0
+);
+
+
+    // Internal signals
+    logic rst_n;
+    logic en;
+    logic btn_in;
+    logic btn_manual_load;
+    logic [7:0] sw_time;
+
+    logic led_red;
+    logic led_yellow;
+    logic led_green;
+
+    logic tick_1s_debug;
+    logic [7:0] timer_counter_debug;
+
+    // MODIFIED:
+    // Debug signal from Traffic_light_controller.
+    // Used to display PED/NOR and enable buzzer only when request is pending.
+    logic ped_request_debug;
+
+    // MODIFIED:
+    // Buzzer control signals.
+    logic buzzer_out;
+    logic [1:0] beep_level;
+
+    // Input mapping
+    assign rst_n           = KEY[0];     // KEY0: nhan = reset
+    assign en              = SW[9];      // SW9 = enable
+    assign btn_in          = ~KEY[2];    // KEY2: pedestrian button
+    assign btn_manual_load = SW[8];      // SW8: manual load
+    assign sw_time         = SW[7:0];    // SW[7:0]: gia tri thoi gian nap tay
+
+
+    // DUT
+    Traffic_light_controller u_core (
+        .clk             (CLOCK_50),
+        .rst_n           (rst_n),
+        .en              (en),
+        .btn_in          (btn_in),
+        .sw_time         (sw_time),
+        .btn_manual_load (btn_manual_load),
+
+        .led_red         (led_red),
+        .led_yellow      (led_yellow),
+        .led_green       (led_green),
+
+        // OLD:
+        // .hex1(HEX5),
+        // .hex2(HEX4),
+        //
+        // MODIFIED:
+        // 3-digit countdown timer.
+        .hex_hundreds    (HEX5),
+        .hex_tens        (HEX4),
+        .hex_ones        (HEX3),
+
+        .tick_1s_debug       (tick_1s_debug),
+        .timer_counter_debug (timer_counter_debug),
+
+        // MODIFIED:
+        // Expose latched pedestrian request for display/buzzer.
+        .ped_request_debug   (ped_request_debug)
+    );
+
+    // Red phase buzzer
+    red_phase_buzzer u_buzzer (
+        .clk         (CLOCK_50),
+        .rst_n       (rst_n),
+        .en          (en),
+
+        // OLD:
+        // .red_active  (led_red),
+        //
+        // MODIFIED:
+        // Buzzer only works when RED is active and a pedestrian request is pending.
+        .red_active  (led_red & ped_request_debug),
+
+        .timer_count (timer_counter_debug),
+
+        .buzzer_out  (buzzer_out),
+        .beep_level  (beep_level)
+    );
+
+    // Pedestrian status display
+    status_display_cpu u_status_display (
+        .ped_req (ped_request_debug),
+
+        .HEX2    (HEX2),
+        .HEX1    (HEX1),
+        .HEX0    (HEX0)
+    );
+
+    // GPIO mapping
+  
+    always_comb begin
+        GPIO = 4'b0000;
+
+        GPIO[0] = led_red;
+        GPIO[1] = led_yellow;
+        GPIO[2] = led_green;
+        GPIO[3] = buzzer_out;
+    end
+
+
+    // LED debug mapping
+  
+    always_comb begin
+        LEDR = 10'b0;
+
+        LEDR[0] = led_red;
+        LEDR[1] = led_yellow;
+        LEDR[2] = led_green;
+
+        // Keep tick debug for checking real 1-second pulse on kit.
+        LEDR[3] = tick_1s_debug;
+
+        // Pedestrian request debug.
+        LEDR[4] = ped_request_debug;
+
+        // Buzzer debug.
+        LEDR[5] = buzzer_out;
+
+        // Beep level debug:
+        // 00 = off, 01 = slow, 10 = medium, 11 = fast.
+        LEDR[7:6] = beep_level;
+
+        // Keep a small timer debug indication.
+        LEDR[9:8] = timer_counter_debug[1:0];
+    end
+
+endmodule

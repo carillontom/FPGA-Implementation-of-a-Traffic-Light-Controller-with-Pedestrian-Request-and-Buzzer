@@ -1,0 +1,149 @@
+module Traffic_light_controller(
+	input logic clk, rst_n, en, 
+	
+	input logic btn_in,
+	
+	input logic [7:0] sw_time,
+	input logic btn_manual_load,
+	
+	// OLD:
+	// output logic [6:0] hex1, hex2,
+	//
+	// MODIFIED:
+	// Timer display now uses 3 HEX digits:
+	// HEX5 = hundreds, HEX4 = tens, HEX3 = ones.
+	output logic [6:0] hex_hundreds,
+	output logic [6:0] hex_tens,
+	output logic [6:0] hex_ones,
+	
+	output logic led_red,
+	output logic led_yellow,
+	output logic led_green,
+	output logic tick_1s_debug,
+	output logic [7:0] timer_counter_debug,
+	output logic ped_request_debug
+);
+
+	logic tick_1s;
+	
+	logic button_pulsee;
+	
+	logic ped_request;
+	
+	logic req_clear;
+	logic timer_add, timer_sub, timer_load;
+	logic [7:0] timer_value;
+	
+	logic timer_10sec_left, timer_5sec_left;
+	logic [7:0] timer_counter;
+	logic timer_expired_signal;
+	
+	logic manual_load_pulse;
+	
+	
+	clk_divider u1(
+		.clk_50  (clk),
+		.rst_n   (rst_n),
+		.tick_1s (tick_1s)
+	);
+
+	// OLD:
+	// button_pulse #(.DEBOUNCE_COUNT(5)) ped_btn(...)
+	// button_pulse #(.DEBOUNCE_COUNT(5)) manual_load_btn(...)
+	//
+	// MODIFIED:
+	// Use 500000 for real DE10 kit button debounce.
+	button_pulse #(.DEBOUNCE_COUNT(500000)) ped_btn(
+		.clk       (clk),
+		.rst_n     (rst_n),
+		.btn_in    (btn_in),
+		.btn_pulse (button_pulsee)
+	);
+
+	button_pulse #(.DEBOUNCE_COUNT(500000)) manual_load_btn(
+		.clk       (clk),
+		.rst_n     (rst_n),
+		.btn_in    (btn_manual_load),
+		.btn_pulse (manual_load_pulse)
+	);
+	
+	ped_req_reg u3(
+		.clk       (clk),
+		.rst_n     (rst_n),
+		.btn_pulse (button_pulsee),
+		.req_clr   (req_clear),
+		.ped_req   (ped_request)
+	);
+	
+	
+	
+	traffic_fsm u4 (
+		.clk       (clk),
+		.rst_n     (rst_n),
+		.en        (en),
+
+		.ped_req   (ped_request),
+
+		// MODIFIED:
+		// Direct button pulse is given to FSM.
+		// Used for one-time decisions such as GREEN_DEC and RED_INC.
+		.ped_pulse (button_pulsee),
+
+		.req_clr   (req_clear),
+
+		.timer_10sec_remaining (timer_10sec_left),
+		.timer_5sec_remaining  (timer_5sec_left),
+
+		.led_red    (led_red),
+		.led_yellow (led_yellow),
+		.led_green  (led_green),
+
+		.timer_load (timer_load),
+		.timer_add  (timer_add),
+		.timer_sub  (timer_sub),
+
+		.timer_expired (timer_expired_signal),
+		.timer_value   (timer_value)
+	);
+
+
+	
+	phase_timer u_phase_timer(
+		.tick_1s      (tick_1s),
+		.clk          (clk),
+		.rst_n        (rst_n),
+		.en           (en),
+
+		.timer_value  (timer_value),
+		.timer_add    (timer_add),
+		.timer_sub    (timer_sub),
+		.timer_load   (timer_load),
+
+		.manual_time  (sw_time),
+		.manual_load  (manual_load_pulse),
+
+		.timer_count  (timer_counter),
+
+		.timer_expired         (timer_expired_signal),
+		.timer_10sec_remaining (timer_10sec_left),
+		.timer_5sec_remaining  (timer_5sec_left)
+	);
+
+	
+	// OLD:
+	// display_7seg u5(.timer_count(timer_counter), .hex1(hex1), .hex2(hex2));
+	//
+	// MODIFIED:
+	// Use 3-digit countdown display.
+	display_7seg u5(
+		.timer_count  (timer_counter),
+		.hex_hundreds (hex_hundreds),
+		.hex_tens     (hex_tens),
+		.hex_ones     (hex_ones)
+	);
+	
+	assign tick_1s_debug       = tick_1s;
+	assign timer_counter_debug = timer_counter;
+	assign ped_request_debug   = ped_request;
+	
+endmodule

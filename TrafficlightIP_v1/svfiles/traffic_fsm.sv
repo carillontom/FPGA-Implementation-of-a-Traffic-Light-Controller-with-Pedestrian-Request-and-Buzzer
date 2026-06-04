@@ -1,0 +1,271 @@
+module traffic_fsm(
+	input logic clk, rst_n, en,
+	input logic ped_req,							// input of pedestrian request, latched from ped_req_reg
+	
+	input logic ped_pulse,							// MODIFIED: direct 1-clock pulse from button_pulse
+														// Used only to trigger immediate GREEN_DEC / RED_INC.
+														// ped_req is kept for display until end of RED.
+	
+	input logic timer_expired,
+	
+	output logic req_clr,							// clear pedestrian request signal
+	
+	input logic timer_10sec_remaining, timer_5sec_remaining,
+	
+	output logic led_red,
+	output logic led_yellow,
+	output logic led_green,
+
+	output logic timer_load,
+	output logic timer_add, timer_sub,
+	output logic [7:0] timer_value
+);
+
+	typedef enum logic [3:0] {
+		IDLE,
+		GREEN_INIT,
+		GREEN,
+		YELLOW_INIT,
+		YELLOW,
+		RED_INIT,
+		RED,
+		GREEN_DEC,
+		RED_INC
+	} state_t;
+	
+	state_t state, next_state;
+	
+	always_ff @(posedge clk or negedge rst_n) begin
+		if(~rst_n)
+			state <= IDLE;
+		else 
+			state <= next_state;
+	end
+	
+	always_comb begin
+		next_state = state;
+		
+		case(state)
+		
+			IDLE: begin
+				if(en)
+					next_state = GREEN_INIT;
+				else
+					next_state = IDLE;
+			end
+			
+			GREEN_INIT: begin
+				next_state = GREEN;
+			end
+							
+			GREEN: begin
+				if(timer_expired) begin
+					next_state = YELLOW_INIT;
+				end
+
+				// GREEN_DEC is triggered only by a NEW button press.
+				else if(ped_pulse && ~timer_10sec_remaining) begin
+					next_state = GREEN_DEC;
+				end
+				else begin
+					next_state = GREEN;
+				end
+			end
+			
+			YELLOW_INIT: begin
+				next_state = YELLOW;
+			end
+					
+			YELLOW: begin
+				if(timer_expired) 
+					next_state = RED_INIT;
+				else 
+					next_state = YELLOW;
+			end
+			
+			RED_INIT: begin
+				next_state = RED;
+			end
+			
+			RED: begin 			
+				if(timer_expired) begin
+					next_state = GREEN_INIT;
+				end
+
+				// RED_INC only happens when the user presses the button
+				// while RED has less than 5 seconds remaining.
+				// If the user pressed earlier in RED, ped_req is displayed,
+				// but it will not auto-trigger RED_INC later.
+				else if(ped_pulse && timer_5sec_remaining) begin
+					next_state = RED_INC;
+				end
+				else begin
+					next_state = RED;
+				end
+			end
+					
+			GREEN_DEC: begin
+				next_state = GREEN;
+			end
+							
+			RED_INC: begin
+				next_state = RED;
+			end
+			
+			default: begin
+				next_state = IDLE;
+			end
+			
+		endcase
+	end
+	
+	always_comb begin
+		
+		case(state)
+		
+			IDLE: begin
+				led_red = 0;
+				led_green = 1'b0;
+				led_yellow = 0;
+				
+				req_clr = 0;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 0;
+				timer_value = 8'd0;
+			end
+						
+			GREEN_INIT: begin
+				led_red = 0;
+				led_green = 1'b1;
+				led_yellow = 0;
+				
+				req_clr = 0;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 1;
+				timer_value = 8'd15;
+			end
+						
+			GREEN: begin 
+				led_red = 0;
+				led_green = 1'b1;
+				led_yellow = 0;
+				
+				req_clr = 0;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 0;
+				timer_value = 8'd0;
+			end
+			
+			RED_INIT: begin	
+				led_red = 1'b1;
+				led_green = 0;
+				led_yellow = 0;
+				
+				req_clr = 0;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 1;
+				timer_value = 8'd15;
+			end
+				
+			RED: begin
+				led_red = 1'b1;
+				led_green = 0;
+				led_yellow = 0;
+				
+
+				// Clear the pedestrian request only when the RED phase finishes.
+				// This keeps "PED" visible during GREEN/YELLOW/RED until RED is done.
+				req_clr = timer_expired;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 0;
+				timer_value = 8'd0;
+			end
+					
+			YELLOW_INIT: begin
+				led_red = 0;
+				led_green = 1'b0;
+				led_yellow = 1'b1;
+				
+				req_clr = 0;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 1;
+				timer_value = 8'd3;
+			end
+			
+			YELLOW: begin
+				led_red = 0;
+				led_green = 0;
+				led_yellow = 1;
+				
+
+				// Do not clear request during YELLOW.
+				// Keep PED displayed until the following RED phase finishes.
+				req_clr = 0;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 0;
+				timer_value = 8'd0;
+			end
+					
+			GREEN_DEC: begin
+				led_red = 0;
+				led_green = 1'b1;
+				led_yellow = 0;
+				
+
+				// Do not clear request here.
+				// PED must remain visible until RED finishes.
+				req_clr = 0;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 1;
+				timer_value = 8'd2; 	
+			end
+
+			RED_INC: begin
+				led_red = 1;
+				led_green = 0;
+				led_yellow = 0;
+				
+
+				// Do not clear request here.
+				// PED remains visible during extended RED.
+				req_clr = 0;
+				
+				timer_add = 1;
+				timer_sub = 0;
+				timer_load = 0;
+				timer_value = 8'd10;
+			end
+
+			default: begin
+				led_red = 0;
+				led_green = 0;
+				led_yellow = 0;
+				
+				req_clr = 0;
+				
+				timer_add = 0;
+				timer_sub = 0;
+				timer_load = 0;
+				timer_value = 0;
+			end
+
+		endcase
+	end
+
+endmodule
